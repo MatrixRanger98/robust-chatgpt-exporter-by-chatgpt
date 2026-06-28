@@ -1,4 +1,4 @@
-# ChatGPT Conversation Exporter: Usage Guide
+# Robust ChatGPT Conversation Exporter by ChatGPT
 
 ## Acknowledgement
 
