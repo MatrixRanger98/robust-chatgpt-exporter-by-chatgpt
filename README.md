@@ -1,4 +1,4 @@
-# Robust ChatGPT Conversation Exporter by ChatGPT
+# ChatGPT Conversation Exporter: Usage Guide
 
 ## Acknowledgement
 
@@ -6,7 +6,7 @@ This exporter is a substantially modified version of code originally based on th
 
 https://gist.github.com/ocombe/1d7604bd29a91ceb716304ef8b5aa4b5
 
-The current version was significantly revised by ChatGPT with a human instructor (me) in the loop. Major changes include folder-picker based export, one-by-one file writing, top-level folder organization, skip-existing behavior, robust conversation-list fetching, live progress reporting, retry/backoff handling for rate limits, sanitized filenames, URL-encoded links, and revised attachment handling.
+The current version was significantly revised by ChatGPT with a human in the loop. Major changes include folder-picker based export, one-by-one file writing, top-level folder organization, skip-existing behavior, robust conversation-list fetching, live progress reporting, retry/backoff handling for rate limits, sanitized filenames, URL-encoded links, KaTeX HTML math rendering, and revised attachment handling.
 
 ## What This Version Does
 
@@ -16,7 +16,7 @@ It exports:
 
 - JSON conversation backups
 - Markdown conversation files
-- HTML conversation files with sidebar navigation
+- HTML conversation files with sidebar navigation and KaTeX-rendered ChatGPT-style LaTeX math
 - Images and attachments referenced by conversations
 - A final run log
 
@@ -251,6 +251,61 @@ Example:
 
 If a path contains characters that need encoding, the link target is encoded, but the visible link text is not unnecessarily encoded.
 
+
+## Math Rendering in HTML
+
+The latest HTML exporter supports LaTeX math rendering with **KaTeX**.
+
+Important implementation detail:
+
+```text
+The exporter uses KaTeX itself, but it does not use the KaTeX auto-render plugin.
+```
+
+Earlier attempts used this order:
+
+```js
+el.innerHTML = marked.parse(md);
+renderMathInElement(el);
+```
+
+That approach can fail because the Markdown parser may consume or transform the backslashes in ChatGPT-style math delimiters before KaTeX sees them. For example, `\(` and `\[` may no longer be intact after Markdown parsing.
+
+The current approach instead protects and renders math **before** passing the remaining text through `marked.parse()`. It calls KaTeX directly, using:
+
+```js
+katex.renderToString(tex, {
+  displayMode: true_or_false,
+  throwOnError: false,
+  strict: false,
+});
+```
+
+The exporter intentionally handles ChatGPT-style delimiters:
+
+```text
+\( inline math \)
+\[ display math \]
+```
+
+It intentionally does **not** try to interpret dollar-sign delimiters:
+
+```text
+$inline math$
+$$display math$$
+```
+
+This avoids false positives with ordinary dollar signs in conversation text, prices, shell prompts, and code snippets.
+
+The generated HTML loads:
+
+- `katex.min.css`
+- `katex.min.js`
+
+It does not need `auto-render.min.js` in the current math-rendering design.
+
+If KaTeX fails to load, the page should still show the conversation text rather than going blank. In that case, math may appear as raw LaTeX, but the answers should remain visible.
+
 ## JSON Files
 
 JSON files are saved as raw conversation data from ChatGPT:
@@ -414,6 +469,21 @@ Use the Markdown URL-encoded version or later.
 
 The corrected versions sanitize file paths and URL encode Markdown link targets.
 
+### HTML math does not render
+
+Use the KaTeX v4 exporter or later.
+
+The current math-rendering approach uses KaTeX directly with `katex.renderToString()` and handles ChatGPT-style delimiters:
+
+```text
+\( inline math \)
+\[ display math \]
+```
+
+It does not rely on the KaTeX auto-render plugin, and it does not parse `$...$` or `$$...$$`.
+
+For HTML files already exported with an older or broken math renderer, run the existing-HTML KaTeX v4 repair script.
+
 ### Some conversations seem missing
 
 Use the robust-list version.
@@ -433,4 +503,6 @@ Use the latest robust-list version, which includes:
 - URL-encoded Markdown image and attachment links
 - 429 retry/backoff
 - robust conversation list fetching
+- KaTeX math rendering for `\(...\)` and `\[...\]` in HTML
+- no dollar-sign math parsing, to avoid false positives
 - detailed run log
