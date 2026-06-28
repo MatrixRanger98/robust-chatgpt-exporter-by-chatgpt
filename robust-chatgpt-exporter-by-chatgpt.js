@@ -817,6 +817,11 @@
     return lines.join("\n");
   }
 
+
+  function htmlRuntimeScript() {
+    return "<script data-chatgpt-exporter-runtime=\"v4-math-before-markdown\">\n(function () {\n  function escapeHtmlText(value) {\n    return String(value == null ? '' : value)\n      .replace(/&/g, '&amp;')\n      .replace(/</g, '&lt;')\n      .replace(/>/g, '&gt;')\n      .replace(/\"/g, '&quot;')\n      .replace(/'/g, '&#39;');\n  }\n\n  function escapeRegExp(value) {\n    return String(value).replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\n  }\n\n  function decodeBase64Utf8(value) {\n    try {\n      const binary = atob(value || '');\n      if (window.TextDecoder) {\n        const bytes = new Uint8Array(binary.length);\n        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);\n        return new TextDecoder('utf-8').decode(bytes);\n      }\n      return decodeURIComponent(escape(binary));\n    } catch (err) {\n      return '[Failed to decode message content: ' + err.message + ']';\n    }\n  }\n\n  function fallbackMarkdown(md) {\n    return '<pre class=\"md-fallback\">' + escapeHtmlText(md) + '</pre>';\n  }\n\n  let markedConfigured = false;\n  let cachedParser = null;\n\n  function configureMarked() {\n    if (cachedParser) return cachedParser;\n    if (!window.marked) return null;\n\n    const parser = typeof window.marked.parse === 'function'\n      ? window.marked.parse.bind(window.marked)\n      : (typeof window.marked === 'function' ? window.marked : null);\n    if (!parser) return null;\n\n    if (!markedConfigured) {\n      markedConfigured = true;\n      try {\n        if (typeof marked.setOptions === 'function') marked.setOptions({ breaks: true, gfm: true });\n\n        if (typeof marked.Renderer === 'function' && typeof marked.use === 'function') {\n          const renderer = new marked.Renderer();\n          renderer.code = function (codeOrToken, langOrInfo) {\n            const token = codeOrToken && typeof codeOrToken === 'object' ? codeOrToken : null;\n            const text = token ? String(token.text || '') : String(codeOrToken || '');\n            const lang = token ? String(token.lang || '') : String(langOrInfo || '').split(/\\s+/)[0];\n            let highlighted = escapeHtmlText(text);\n\n            try {\n              if (window.hljs) {\n                if (lang && hljs.getLanguage && hljs.getLanguage(lang)) {\n                  highlighted = hljs.highlight(text, { language: lang }).value;\n                } else if (hljs.highlightAuto) {\n                  highlighted = hljs.highlightAuto(text).value;\n                }\n              }\n            } catch (err) {\n              highlighted = escapeHtmlText(text);\n            }\n\n            return '<div class=\"code-block\"><button class=\"copy-btn\" onclick=\"navigator.clipboard.writeText(this.nextElementSibling.querySelector(\\'code\\').textContent);this.textContent=\\'Copied!\\';setTimeout(()=>this.textContent=\\'Copy\\',1500)\">Copy</button>'\n              + '<pre><code class=\"hljs\">' + highlighted + '</code></pre></div>';\n          };\n          marked.use({ renderer: renderer });\n        }\n      } catch (err) {\n        console.warn('Markdown renderer setup failed; using default parser when possible.', err);\n      }\n    }\n\n    cachedParser = parser;\n    return cachedParser;\n  }\n\n  function renderLatex(tex, displayMode, originalSource) {\n    if (window.katex && typeof katex.renderToString === 'function') {\n      try {\n        const rendered = katex.renderToString(tex, {\n          displayMode: !!displayMode,\n          throwOnError: false,\n          strict: false,\n          trust: false\n        });\n        return displayMode ? '<div class=\"math-display-wrapper\">' + rendered + '</div>' : rendered;\n      } catch (err) {\n        console.warn('KaTeX failed for one formula; showing source.', err);\n      }\n    }\n    return displayMode\n      ? '<div class=\"math-fallback math-display-fallback\">' + escapeHtmlText(originalSource) + '</div>'\n      : '<span class=\"math-fallback\">' + escapeHtmlText(originalSource) + '</span>';\n  }\n\n  function protectCodeSegments(md) {\n    const tokens = [];\n    const start = String.fromCharCode(0xe100);\n    const end = String.fromCharCode(0xe101);\n\n    function store(match) {\n      const key = start + 'CODE' + tokens.length + end;\n      tokens.push({ key: key, text: match });\n      return key;\n    }\n\n    let text = String(md || '');\n    text = text.replace(/(^|\\n)(```|~~~)[^\\n]*\\n[\\s\\S]*?\\n\\2(?=\\n|$)/g, store);\n    text = text.replace(/`[^`\\n]*`/g, store);\n\n    return {\n      text: text,\n      restore: function (value) {\n        let out = value;\n        for (let i = 0; i < tokens.length; i++) out = out.split(tokens[i].key).join(tokens[i].text);\n        return out;\n      }\n    };\n  }\n\n  function protectMathBeforeMarkdown(md) {\n    const codeProtected = protectCodeSegments(md);\n    const math = [];\n    const start = String.fromCharCode(0xe000);\n    const end = String.fromCharCode(0xe001);\n\n    function hold(tex, displayMode, originalSource) {\n      const key = start + 'MATH' + math.length + end;\n      math.push({ key: key, html: renderLatex(String(tex || '').trim(), displayMode, originalSource), display: !!displayMode });\n      return key;\n    }\n\n    let text = codeProtected.text;\n\n    // Only handle ChatGPT's LaTeX delimiters. Do not handle dollar-sign math.\n    // This runs before marked.parse(); otherwise marked consumes the backslash\n    // in \\[ and \\( as Markdown escaping and KaTeX never sees the delimiters.\n    text = text.replace(/\\\\\\[([\\s\\S]*?)\\\\\\]/g, function (match, tex) {\n      return '\\n\\n' + hold(tex, true, match) + '\\n\\n';\n    });\n    text = text.replace(/\\\\\\(([\\s\\S]*?)\\\\\\)/g, function (match, tex) {\n      return hold(tex, false, match);\n    });\n\n    text = codeProtected.restore(text);\n    return { markdown: text, math: math };\n  }\n\n  function restoreMathAfterMarkdown(html, math) {\n    let out = String(html || '');\n    for (let i = 0; i < math.length; i++) {\n      const item = math[i];\n      const key = escapeRegExp(item.key);\n      if (item.display) {\n        out = out.replace(new RegExp('<p>\\\\s*' + key + '\\\\s*<\\\\/p>', 'g'), item.html);\n      }\n      out = out.replace(new RegExp(key, 'g'), item.html);\n    }\n    return out;\n  }\n\n  function renderMarkdown(md) {\n    const parser = configureMarked();\n    if (!parser) return fallbackMarkdown(md);\n\n    const prepared = protectMathBeforeMarkdown(md);\n    try {\n      const html = parser(prepared.markdown);\n      return restoreMathAfterMarkdown(html, prepared.math);\n    } catch (err) {\n      console.warn('Markdown rendering failed; using plain-text fallback.', err);\n      return fallbackMarkdown(md);\n    }\n  }\n\n  function renderAll() {\n    document.querySelectorAll('.md-content').forEach(function (el) {\n      const md = decodeBase64Utf8(el.dataset ? el.dataset.md : '');\n      try {\n        el.innerHTML = renderMarkdown(md);\n      } catch (err) {\n        console.error('Message rendering failed; showing raw Markdown fallback.', err);\n        el.innerHTML = fallbackMarkdown(md);\n      }\n    });\n\n    const active = document.querySelector('.sidebar-item.active');\n    if (active) {\n      try { active.scrollIntoView({ block: 'center', behavior: 'instant' }); }\n      catch (err) { active.scrollIntoView({ block: 'center' }); }\n    }\n  }\n\n  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', renderAll);\n  else renderAll();\n})();\n</script>";
+  }
+
   // ── HTML converter ──────────────────────────────────────────────────
 
   function toHtml(convo, fileMap = {}, allConversations = [], currentFname = "") {
@@ -921,6 +926,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title}</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release/build/styles/github-dark.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body {
@@ -996,6 +1002,11 @@
   .message.assistant .content ol { margin: 8px 0; padding-left: 24px; }
   .message.assistant .content li { margin: 4px 0; }
   .message.assistant .content a { color: #1a7f64; }
+  .katex-display { overflow-x: auto; overflow-y: hidden; padding: 4px 0; }
+  .math-display-wrapper { overflow-x: auto; overflow-y: hidden; margin: 0.75em 0; }
+  .math-fallback { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; }
+  .math-display-fallback { display: block; overflow-x: auto; margin: 0.75em 0; }
+  .md-fallback { white-space: pre-wrap; word-break: break-word; overflow-wrap: anywhere; font-family: inherit; background: transparent; color: inherit; }
   .message.assistant .content code {
     background: #f0f0f0; border-radius: 4px; padding: 2px 5px;
     font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
@@ -1065,37 +1076,8 @@
 </div>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"><\/script>
 <script src="https://cdn.jsdelivr.net/gh/highlightjs/cdn-release/build/highlight.min.js"><\/script>
-<script>
-document.addEventListener('DOMContentLoaded', () => {
-  marked.setOptions({
-    highlight: (code, lang) => {
-      if (lang && hljs.getLanguage(lang)) {
-        return hljs.highlight(code, { language: lang }).value;
-      }
-      return hljs.highlightAuto(code).value;
-    },
-    breaks: true,
-  });
-
-  const renderer = new marked.Renderer();
-  renderer.code = function({ text, lang }) {
-    const highlighted = lang && hljs.getLanguage(lang)
-      ? hljs.highlight(text, { language: lang }).value
-      : hljs.highlightAuto(text).value;
-    return '<div class="code-block"><button class="copy-btn" onclick="navigator.clipboard.writeText(this.nextElementSibling.querySelector(\\'code\\').textContent);this.textContent=\\'Copied!\\';setTimeout(()=>this.textContent=\\'Copy\\',1500)">Copy</button>'
-      + '<pre><code class="hljs">' + highlighted + '</code></pre></div>';
-  };
-  marked.use({ renderer });
-
-  document.querySelectorAll('.md-content').forEach(el => {
-    const md = decodeURIComponent(escape(atob(el.dataset.md)));
-    el.innerHTML = marked.parse(md);
-  });
-
-  const active = document.querySelector('.sidebar-item.active');
-  if (active) active.scrollIntoView({ block: 'center', behavior: 'instant' });
-});
-<\/script>
+<script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"><\/script>
+${htmlRuntimeScript()}
 </body>
 </html>`;
   }
